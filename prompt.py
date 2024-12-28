@@ -71,3 +71,50 @@ def get_prompt_template(type, content):
     
     # Render the template with the content
     return template.render(content=content)
+# Define the template
+cot_prompt_template = PromptTemplate(
+    input_variables=["query", "doc_type", "contextual_information"],
+    template="""
+You are an AI assistant trained to analyze and answer questions from multiple types of data sources, including:
+- PDFs
+- JSON files
+- Audio files
+- Video content
+- Jira tickets
+- Confluence pages
+
+Given the query:
+"{query}"
+
+And the document type being analyzed:
+"{doc_type}"
+
+Follow this reasoning process:
+1. Understand the query: Break down the query into its essential components.
+2. Identify the relevant context: Use metadata and contextual clues from "{doc_type}" to determine the most relevant parts of the document.
+3. Process the data:
+   - For PDFs: Extract text from specific sections based on the query.
+   - For JSON: Parse and retrieve the relevant fields and key-value pairs.
+   - For Audio/Video: Summarize the transcription and match relevant timestamps.
+   - For Jira: Fetch the issue details, status, and history.
+   - For Confluence: Extract key pages, headings, and updates.
+4. Synthesize the information: Combine information from the context to produce a coherent response to the query.
+
+Provide your reasoning step by step:
+{contextual_information}
+
+Answer the query based on the processed data.
+
+Your final response should clearly explain how the information from the relevant sources addresses the query.
+"""
+)
+
+# Example of using the template
+query = "What is the status of the recent sprint in Jira?"
+doc_type = "Jira"
+contextual_information = """
+- The sprint started on 2024-12-15 and ends on 2024-12-30.
+- 5 issues are completed, 2 are in progress, and 3 are unresolved.
+- Key blockers were identified in the 'API Integration' task.
+"""
+

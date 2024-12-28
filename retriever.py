@@ -83,37 +83,61 @@ def hybrid_search(query, index="documents", num_results=5):
         return []
 
 
-
-# Define the Chain of Thought Prompt Template for conversational chain
 def get_chain_of_thought_prompt(query, documents):
-    # We will use a Chain of Thought (CoT) prompt template to guide the model through reasoning.
+    # Custom Chain of Thought (CoT) prompt template to guide conversational reasoning
     thought_process = """
-    Let's break down the following documents and reason about them step by step. 
-    You will analyze each document carefully and explain why it is relevant to the query. 
-    Once all documents have been analyzed, provide the most appropriate answer based on the reasoning from each document.
+    We have a question and multiple documents. Let's reason through these documents step by step, 
+    analyzing the relevance of each one to the query, and then combining the insights to form the best possible documents. 
     
     Query: {query}
     
-    Document 1: {doc_1_text}
+    Here is the breakdown of the documents and their reasoning:
+
+    Document 1: {doc_1_type} (Type of Document)
     Reasoning for Document 1:
     {reasoning_1}
     
-    Document 2: {doc_2_text}
+    Document 2: {doc_2_type} (Type of Document)
     Reasoning for Document 2:
     {reasoning_2}
     
-    Document 3: {doc_3_text}
+    Document 3: {doc_3_type} (Type of Document)
     Reasoning for Document 3:
     {reasoning_3}
     
-    Final Answer:
-    Based on the above reasoning, the answer to the query is:
+    In conclusion, based on the reasoning from all the documents, the final answer to the query is:
     """
+    
+    # Create the prompt template with dynamic variables
     prompt = PromptTemplate(
-        input_variables=["query", "doc_1_text", "reasoning_1", "doc_2_text", "reasoning_2", "doc_3_text", "reasoning_3"],
+        input_variables=["query", "doc_1_type", "reasoning_1", "doc_2_type", "reasoning_2", "doc_3_type", "reasoning_3"],
         template=thought_process
     )
-    return prompt
+    
+    # Render the prompt with the provided query and documents
+    return prompt.format(
+        query=query,
+        doc_1_type=documents[0]["type"],
+        reasoning_1=documents[0]["reasoning"],
+        doc_2_type=documents[1]["type"],
+        reasoning_2=documents[1]["reasoning"],
+        doc_3_type=documents[2]["type"],
+        reasoning_3=documents[2]["reasoning"]
+    )
+
+# Example usage:
+documents = [
+    {"type": "pdf", "reasoning": "This document explains the main topic in depth, providing detailed analysis relevant to the query."},
+    {"type": "json", "reasoning": "The data extracted from this JSON document gives concrete figures that directly support the answer."},
+    {"type": "audio", "reasoning": "The transcript of this audio interview provides conversational context that sheds light on the query."}
+]
+
+query = "What are the key insights provided in these documents?"
+
+# Generate the Chain of Thought prompt
+prompt = get_chain_of_thought_prompt(query, documents)
+print(prompt)
+
 # Ranking the documents using T5/BART
 def rank_documents_with_model(documents, query):
     try:
