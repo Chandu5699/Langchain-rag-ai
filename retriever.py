@@ -1,63 +1,192 @@
-def create_conversational_chain(vectorstore):
-    try:
-        retriever = vectorstore.as_retriever()
-        llm = OpenAI()
-        conversation_chain = ConversationalRetrievalChain.from_llm(llm, retriever)
-        return conversation_chain
-    except Exception as e:
-        logging.error(f"Error creating conversational chain: {e}")
-        raise
+import logging
 from elasticsearch import Elasticsearch
-from elasticsearch.helpers import bulk
+from transformers import T5Tokenizer, T5ForConditionalGeneration, pipeline
+from langchain.chains import ConversationalRetrievalChain
+from langchain.llms import OpenAI
+from langchain.prompts import PromptTemplate
+from langchain.vectorstores import ElasticsearchVectorSearch
+from langchain.embeddings import OpenAIEmbeddings
 
-# Initialize Elasticsearch client
-es = Elasticsearch([{'host': 'localhost', 'port': 9200}])
+# Setup logging
+logging.basicConfig(filename='search_log.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def index_embeddings_to_es(index_name, embeddings_with_metadata):
+# Elasticsearch setup
+es = Elasticsearch("http://localhost:9200")
+
+# Setup the model (T5 or BART)
+model_name = "t5-base"  # You can change this to "facebook/bart-large" for BART
+tokenizer = T5Tokenizer.from_pretrained(model_name)
+model = T5ForConditionalGeneration.from_pretrained(model_name)
+from langchain.prompts import PromptTemplate
+
+# Define a prompt template to generate different queries from the original query
+query_variation_template = PromptTemplate(
+    input_variables=["original_query"],
+    template="""
+    You are a helpful assistant. Your task is to generate different versions of the original user query by paraphrasing it in multiple ways.
+    The user query is:
+
+    Original Query: {original_query}
+
+    Please generate 5 variations of this query that would ask the same question but in different ways.
+    1.
+    2.
+    3.
+    4.
+    5.
+    """
+)
+def process_query(query):
     try:
-        actions = []
-        for embedding in embeddings_with_metadata:
-            action = {
-                "_index": index_name,
-                "_id": embedding['metadata']['id'],
-                "_source": {
-                    "embedding": embedding["embedding"],
-                    "metadata": embedding["metadata"]
+        # Step 1: Generate different variations of the query
+        query_variations = query_variation_template.run(original_query=original_query)
+        print("Generated Query Variations:", query_variations)
+        
+        # Step 2: Retrieve documents for each query variation
+        all_retrieved_docs = []
+        for query in query_variations.splitlines():
+            docs = retrieve_documents_from_query(query)
+            all_retrieved_docs.extend(docs)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+# Initialize the hybrid search function using Elasticsearch
+def hybrid_search(query, index="documents", num_results=5):
+    try:
+        # Vector Search: Use OpenAI Embeddings to create vector representation of the query
+        embeddings = OpenAIEmbeddings()
+        query_vector = embeddings.embed(query)
+
+        # Elasticsearch query (Hybrid: Match query with both text search and vector search)
+        body = {
+            "query": {
+                "bool": {
+                    "should": [
+                        {"match": {"text": query}},  # Traditional text search
+                        {"knn": {
+                            "field": "vector",  # Assuming 'vector' is the field storing document embeddings
+                            "query_vector": query_vector,
+                            "k": num_results
+                        }}
+                    ]
                 }
             }
-            actions.append(action)
-        
-        bulk(es, actions)
-        print("Embeddings indexed in ElasticSearch successfully.")
+        }
+        # Execute the hybrid search query
+        response = es.search(index=index, body=body)
+        # Extract the top results
+        results = [hit["_source"] for hit in response["hits"]["hits"]]
+        return results
+
     except Exception as e:
-        print(f"Error indexing embeddings: {e}")
-        raise
-chat_history = ChatMessageHistory()
-conversation_memory = ConversationBufferMemory(chat_memory=chat_history, return_messages=True)
+        logging.error(f"Error in hybrid search: {str(e)}")
+        return []
 
 
-# Example usage:
-embeddings_with_metadata = [{"embedding": [0.1, 0.2, 0.3], "metadata": {"id": "1", "type": "pdf"}}]
-index_embeddings_to_es("multimodal_embeddings", embeddings_with_metadata)
-# Main Pipeline
-def main_pipeline():
+
+# Define the Chain of Thought Prompt Template for conversational chain
+def get_chain_of_thought_prompt(query, documents):
+    # We will use a Chain of Thought (CoT) prompt template to guide the model through reasoning.
+    thought_process = """
+    Let's break down the following documents and reason about them step by step. 
+    You will analyze each document carefully and explain why it is relevant to the query. 
+    Once all documents have been analyzed, provide the most appropriate answer based on the reasoning from each document.
+    
+    Query: {query}
+    
+    Document 1: {doc_1_text}
+    Reasoning for Document 1:
+    {reasoning_1}
+    
+    Document 2: {doc_2_text}
+    Reasoning for Document 2:
+    {reasoning_2}
+    
+    Document 3: {doc_3_text}
+    Reasoning for Document 3:
+    {reasoning_3}
+    
+    Final Answer:
+    Based on the above reasoning, the answer to the query is:
+    """
+    prompt = PromptTemplate(
+        input_variables=["query", "doc_1_text", "reasoning_1", "doc_2_text", "reasoning_2", "doc_3_text", "reasoning_3"],
+        template=thought_process
+    )
+    return prompt
+# Ranking the documents using T5/BART
+def rank_documents_with_model(documents, query):
     try:
-        chunk_size = 1000
-        for data_chunk in process_and_chunk_data(chunk_size):
-            # Generate embeddings for each chunk
-            embeddings_with_metadata = generate_embeddings(data_chunk)
-            
-            # Store embeddings in vector store
-            vectorstore = store_embeddings_in_vector_store(embeddings_with_metadata)
-            
-            # Create RAG chain
-            rag_chain = create_rag_chain(vectorstore)
-            
-            logging.info(f"Processed and embedded a chunk of size: {len(data_chunk)}")
-    except Exception as e:
-        logging.error(f"Error in the main pipeline: {e}")
-        raise
+        ranked_documents = []
+        for doc in documents:
+            input_text = f"Rank this document: {doc['text']} based on the query: {query}"
+            inputs = tokenizer(input_text, return_tensors="pt", truncation=True, padding=True)
+            outputs = model.generate(inputs['input_ids'], max_length=50)
+            rank_score = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            ranked_documents.append((doc, rank_score))
+        
+        # Sort documents based on the generated rank score
+        ranked_documents.sort(key=lambda x: x[1], reverse=True)
+        return [doc[0] for doc in ranked_documents]
 
-# Execute the pipeline
-if _name_ == "_main_":
-    main_pipeline()
+    except Exception as e:
+        logging.error(f"Error in ranking documents: {str(e)}")
+        return documents
+
+# Define the Conversational Chain LLM with Chain of Thought (CoT)
+def generate_answer_with_cot(query, documents):
+    try:
+        # Step 1: Rank documents using the T5/BART model
+        ranked_documents = rank_documents_with_model(documents, query)
+        
+        # Step 2: Create the Chain of Thought prompt template
+        # Here we only show 3 documents, but it can be scaled for more
+        prompt = get_chain_of_thought_prompt(
+            query=query,
+            doc_1_text=ranked_documents[0]["text"],
+            reasoning_1="Explain why this document is relevant.",
+            doc_2_text=ranked_documents[1]["text"],
+            reasoning_2="Explain why this document is relevant.",
+            doc_3_text=ranked_documents[2]["text"],
+            reasoning_3="Explain why this document is relevant."
+        )
+
+        # Load Conversational Chain LLM (e.g., OpenAI's GPT)
+        llm = OpenAI(model="text-davinci-003", temperature=0.7)
+
+        # Prepare the retrieval chain
+        retriever = ElasticsearchVectorSearch.from_documents(ranked_documents, OpenAIEmbeddings())
+        conversational_chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever)
+
+        # Get the answer from the conversational chain using the CoT prompt
+        response = conversational_chain.run(input=prompt.format(query=query))
+        return response
+
+    except Exception as e:
+        logging.error(f"Error in generating answer with Chain of Thought: {str(e)}")
+        return "Sorry, I couldn't generate an answer."
+
+# Main execution
+def main(query):
+    try:
+        # Step 1: Perform Hybrid Search to get the top documents
+        documents = hybrid_search(query)
+
+        if not documents:
+            logging.info("No documents retrieved in the search.")
+            return "Sorry, no relevant documents were found."
+
+        # Step 2: Generate an answer using the Chain of Thought approach
+        answer = generate_answer_with_cot(query, documents)
+
+        logging.info("Successfully generated the answer.")
+        return answer
+
+    except Exception as e:
+        logging.error(f"Error in the main execution: {str(e)}")
+        return "An error occurred while processing the query."
+
+# Example Query
+query = "What is the capital of France?"
+result = main(query)
+print(result)

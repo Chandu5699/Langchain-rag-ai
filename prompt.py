@@ -61,7 +61,7 @@ Please think through the following steps to analyze this page:
 Now, summarize the key points and action items based on your reasoning.
 """
 }
-def get_prompt_template(input_type, content):
+def get_prompt_template(type, content):
     template_str = PROMPT_TEMPLATES.get(input_type)
     if not template_str:
         return "No prompt available for this type."
