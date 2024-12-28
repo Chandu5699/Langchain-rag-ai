@@ -1,0 +1,51 @@
+# Dictionary to store prompts
+PROMPT_TEMPLATES = {
+    "pdf": """
+    The content of the PDF is provided below. Follow these steps:
+    1. Identify the main topics covered in the text.
+    2. Summarize each topic in a concise manner.
+    3. Highlight any key details or insights mentioned in the text.
+    Here is the content:
+    {content}
+    """,
+    "audio": """
+    The following text has been transcribed from an audio file. Follow these steps:
+    1. Understand the context and the speaker's intent.
+    2. Identify the main ideas or arguments presented.
+    3. Summarize the key points while maintaining the original intent of the speaker.
+    Here is the transcribed text:
+    {content}
+    """,
+    "video": """
+    The following text has been extracted from a video file. Follow these steps:
+    1. Identify the visual and contextual elements conveyed in the text (e.g., scenes, actions).
+    2. Summarize the key events or discussions that occur in the video.
+    3. Highlight any noteworthy insights or conclusions.
+    Here is the extracted text:
+    {content}
+    """,
+    "json": """
+    The following JSON data contains structured information. Follow these steps:
+    1. Parse the data to understand its structure (e.g., keys, values, nested elements).
+    2. Extract meaningful insights or trends from the data.
+    3. Summarize the information in a human-readable format.
+    Here is the JSON content:
+    {content}
+    """,
+    "jira": """
+    The following data is from a Jira issue. Follow these steps:
+    1. Understand the details of the issue (e.g., title, description, status).
+    2. Identify any relevant actions, updates, or comments.
+    3. Summarize the issue's current status and its next steps.
+    Here is the Jira data:
+    {content}
+    """,
+    "confluence": """
+    The following data is from a Confluence page. Follow these steps:
+    1. Identify the purpose and context of the page (e.g., documentation, meeting notes).
+    2. Extract the key topics, points, or actions discussed on the page.
+    3. Summarize the overall content in a concise manner.
+    Here is the Confluence data:
+    {content}
+    """
+}

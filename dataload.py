@@ -1,201 +1,172 @@
-import logging
-import json
-import os
-import pymongo
-import numpy as np
-import torch
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
-from transformers import BertTokenizer, BertModel
-from sentence_transformers import SentenceTransformer
-from pydub import AudioSegment
-import fitz  # PyMuPDF for PDF processing
-import cv2
-from langchain.embeddings import SentenceTransformerEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.chains import ConversationalRetrievalChain
-from langchain.llms import OpenAI
-from langchain.vectorstores import FAISS
-
-# Configure Logging
-logging.basicConfig(
-    filename="data_processing.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
-# MongoDB Configuration
-MONGO_URI = "mongodb://localhost:27017"
-DB_NAME = "multimodal_db"
-COLLECTION_NAME = "data_collection"
-
-# Embedding Model (Text-based example)
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-
-# Initialize MongoDB Client
-try:
-    client = MongoClient(MONGO_URI)
-    db = client[DB_NAME]
-    collection = db[COLLECTION_NAME]
-    logging.info("Successfully connected to MongoDB.")
-except PyMongoError as e:
-    logging.error(f"Failed to connect to MongoDB: {e}")
-    raise
-
-# Function to Load Data from MongoDB in Batches
-def load_data_in_batches(batch_size=1000):
-    try:
-        cursor = collection.find({}, no_cursor_timeout=True).batch_size(batch_size)
-        for record in cursor:
-            yield record
-    except PyMongoError as e:
-        logging.error(f"Error while fetching data from MongoDB: {e}")
-    finally:
-        cursor.close()
-
-# Function to Process and Chunk Data
-def process_and_chunk_data(batch_size=1000):
-    try:
-        data_batch = []
-        for record in load_data_in_batches(batch_size):
-            # Process multimodal data based on type
-            content = None
-            metadata = {
-                "id": record.get("_id"),
-                "type": record.get("type"),
-                "source": record.get("source"),
-                "timestamp": record.get("timestamp"),
-            }
-            
-            # Example handling for PDF
-            if record.get("type") == "pdf":
-                content = extract_text_from_pdf(record.get("file_path"))
-            
-            # Example handling for JSON
-            elif record.get("type") == "json":
-                content = record.get("content")  # Assuming JSON content is stored here
-
-            # Example handling for audio
-            elif record.get("type") == "audio":
-                content = extract_text_from_audio(record.get("file_path"))
-            
-            # Example handling for video
-            elif record.get("type") == "video":
-                content = extract_text_from_video(record.get("file_path"))
-            
-            data_batch.append((content, metadata))
-            
-            # Process batch when it reaches the batch size
-            if len(data_batch) == batch_size:
-                yield data_batch
-                data_batch = []
-        
-        # Yield remaining data
-        if data_batch:
-            yield data_batch
-    except Exception as e:
-        logging.error(f"Error in processing and chunking data: {e}")
-        raise
-
-# PDF Text Extraction
-def extract_text_from_pdf(pdf_path):
+# Function to extract text and metadata from a PDF file
+def extract_text_and_metadata_from_pdf(pdf_path):
     try:
         doc = fitz.open(pdf_path)
+        metadata = doc.metadata
         text = ""
         for page in doc:
             text += page.get_text("text")
-        return text
+        prompt = PromptTemplate(
+            input_variables=["text"],
+            template="Summarize the main points from this PDF content: {text}"
+        )
+        result = llm(prompt.format(text=text))
+        return {"content": result, "metadata": metadata}
     except Exception as e:
-        logging.error(f"Error extracting text from PDF {pdf_path}: {e}")
-        return ""
+        logging.error(f"Error extracting text and metadata from PDF {pdf_path}: {e}")
+        return {"content": "", "metadata": {}}
 
-# Audio Text Extraction (using speech-to-text for this example)
-def extract_text_from_audio(audio_path):
+# Function to extract metadata and placeholder text from an audio file
+def extract_text_and_metadata_from_audio(audio_path):
     try:
         audio = AudioSegment.from_file(audio_path)
-        # Using a placeholder text extraction here; replace with an actual STT model
-        return "Extracted text from audio"
+        metadata = {
+            "duration_seconds": len(audio) / 1000,
+            "file_size": os.path.getsize(audio_path),
+            "format": audio.format_description,
+        }
+        text = "Extracted text from audio"  # Placeholder for STT integration
+        prompt = PromptTemplate(
+            input_variables=["text"],
+            template="Transcribe and refine the text from this audio: {text}"
+        )
+        result = llm(prompt.format(text=text))
+        return {"content": result, "metadata": metadata}
     except Exception as e:
-        logging.error(f"Error extracting text from audio {audio_path}: {e}")
-        return ""
+        logging.error(f"Error extracting text and metadata from audio {audio_path}: {e}")
+        return {"content": "", "metadata": {}}
 
-# Video Text Extraction (using Optical Character Recognition or another method)
-def extract_text_from_video(video_path):
+# Function to extract metadata and placeholder text from a video file
+def extract_text_and_metadata_from_video(video_path):
     try:
         cap = cv2.VideoCapture(video_path)
+        metadata = {
+            "frame_count": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+            "frame_rate": cap.get(cv2.CAP_PROP_FPS),
+            "resolution": (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))),
+            "file_size": os.path.getsize(video_path),
+        }
         text = ""
         while cap.isOpened():
             ret, frame = cap.read()
             if ret:
-                # Placeholder: Process frame with OCR
+                # Placeholder for OCR integration
                 text += "Extracted text from frame"
             else:
                 break
         cap.release()
-        return text
+        prompt = PromptTemplate(
+            input_variables=["text"],
+            template="Summarize the meaningful content extracted from this video: {text}"
+        )
+        result = llm(prompt.format(text=text))
+        return {"content": result, "metadata": metadata}
     except Exception as e:
-        logging.error(f"Error extracting text from video {video_path}: {e}")
-        return ""
+        logging.error(f"Error extracting text and metadata from video {video_path}: {e}")
+        return {"content": "", "metadata": {}}
 
-# Function to Generate Embeddings
-def generate_embeddings(data_batch):
+# Function to process JSON content with metadata
+def extract_text_and_metadata_from_json(json_content):
     try:
-        embeddings = []
-        for content, metadata in data_batch:
-            if isinstance(content, str):  # Example: Text content
-                embedding = embedding_model.encode(content)
-            else:
-                embedding = np.zeros(384)  # Placeholder for non-text content
-            embeddings.append({"embedding": embedding, "metadata": metadata})
-        return embeddings
+        metadata = {
+            "record_count": len(json_content) if isinstance(json_content, list) else 1,
+        }
+        prompt = PromptTemplate(
+            input_variables=["json_content"],
+            template="Summarize the key information from this JSON data: {json_content}"
+        )
+        result = llm(prompt.format(json_content=json_content))
+        return {"content": result, "metadata": metadata}
     except Exception as e:
-        logging.error(f"Error in generating embeddings: {e}")
-        raise
+        logging.error(f"Error processing JSON content: {e}")
+        return {"content": "", "metadata": {}}
 
-# Function to Store Embeddings in a Vector Store (using FAISS as an example)
-def store_embeddings_in_vector_store(embeddings_with_metadata):
+# Function to extract content and metadata from Jira
+def extract_text_and_metadata_from_jira(jira_url, auth_token):
     try:
-        # Example with FAISS vector store (You can use Pinecone, Weaviate, etc.)
-        vectors = [embedding["embedding"] for embedding in embeddings_with_metadata]
-        metadata = [embedding["metadata"] for embedding in embeddings_with_metadata]
-        
-        vectorstore = FAISS.from_documents(vectors, metadata)
-        return vectorstore
+        headers = {"Authorization": f"Bearer {auth_token}"}
+        response = requests.get(jira_url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            metadata = {
+                "issue_key": data.get("key"),
+                "project": data.get("fields", {}).get("project", {}).get("name"),
+                "status": data.get("fields", {}).get("status", {}).get("name"),
+            }
+            prompt = PromptTemplate(
+                input_variables=["jira_data"],
+                template="Summarize the Jira issues and comments: {jira_data}"
+            )
+            result = llm(prompt.format(jira_data=data))
+            return {"content": result, "metadata": metadata}
+        else:
+            logging.error(f"Failed to fetch Jira content: {response.status_code}")
+            return {"content": "", "metadata": {}}
     except Exception as e:
-        logging.error(f"Error storing embeddings in vector store: {e}")
-        raise
+        logging.error(f"Error extracting text and metadata from Jira: {e}")
+        return {"content": "", "metadata": {}}
 
-# Function to Create a RAG Chain using LangChain
-def create_rag_chain(vectorstore):
+# Function to extract content and metadata from Confluence
+def extract_text_and_metadata_from_confluence(confluence_url, auth_token):
     try:
-        # Set up Conversational Retrieval Chain using LangChain
-        retriever = vectorstore.as_retriever()
-        llm = OpenAI(model="text-davinci-003")
-        rag_chain = ConversationalRetrievalChain.from_llm(llm, retriever)
-        return rag_chain
+        headers = {"Authorization": f"Bearer {auth_token}"}
+        response = requests.get(confluence_url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            metadata = {
+                "title": data.get("title"),
+                "author": data.get("history", {}).get("createdBy", {}).get("displayName"),
+                "created_date": data.get("history", {}).get("createdDate"),
+            }
+            prompt = PromptTemplate(
+                input_variables=["confluence_data"],
+                template="Summarize the Confluence page content: {confluence_data}"
+            )
+            result = llm(prompt.format(confluence_data=data))
+            return {"content": result, "metadata": metadata}
+        else:
+            logging.error(f"Failed to fetch Confluence content: {response.status_code}")
+            return {"content": "", "metadata": {}}
     except Exception as e:
-        logging.error(f"Error creating RAG chain: {e}")
-        raise
+        logging.error(f"Error extracting text and metadata from Confluence: {e}")
+        return {"content": "", "metadata": {}}
 
-# Main Pipeline
-def main_pipeline():
+# Main function to process records based on type
+def process_record(record):
+    content_with_metadata = {}
     try:
-        chunk_size = 1000
-        for data_chunk in process_and_chunk_data(chunk_size):
-            # Generate embeddings for each chunk
-            embeddings_with_metadata = generate_embeddings(data_chunk)
-            
-            # Store embeddings in vector store
-            vectorstore = store_embeddings_in_vector_store(embeddings_with_metadata)
-            
-            # Create RAG chain
-            rag_chain = create_rag_chain(vectorstore)
-            
-            logging.info(f"Processed and embedded a chunk of size: {len(data_chunk)}")
-    except Exception as e:
-        logging.error(f"Error in the main pipeline: {e}")
-        raise
+        file_type = record.get("type")
+        if file_type == "pdf":
+            content_with_metadata = extract_text_and_metadata_from_pdf(record.get("file_path"))
+        elif file_type == "audio":
+            content_with_metadata = extract_text_and_metadata_from_audio(record.get("file_path"))
+        elif file_type == "video":
+            content_with_metadata = extract_text_and_metadata_from_video(record.get("file_path"))
+        elif file_type == "json":
+            content_with_metadata = extract_text_and_metadata_from_json(record.get("content"))
+        elif file_type == "jira":
+            content_with_metadata = extract_text_and_metadata_from_jira(record.get("url"), record.get("auth_token"))
+        elif file_type == "confluence":
+            content_with_metadata = extract_text_and_metadata_from_confluence(record.get("url"), record.get("auth_token"))
+        else:
+            logging.warning(f"Unsupported file type: {file_type}")
 
-# Execute the pipeline
-if _name_ == "_main_":
-    main_pipeline()
+        return content_with_metadata
+    except Exception as e:
+        logging.error(f"Error processing record {record}: {e}")
+        return {"content": "", "metadata": {}}
+
+# Example usage
+if __name__ == "__main__":
+    records = [
+        {"type": "pdf", "file_path": "example.pdf"},
+        {"type": "audio", "file_path": "example.mp3"},
+        {"type": "video", "file_path": "example.mp4"},
+        {"type": "json", "content": '{"key": "value"}'},
+        {"type": "jira", "url": "https://jira.example.com/rest/api/2/issue/EX-1", "auth_token": "your_jira_token"},
+        {"type": "confluence", "url": "https://confluence.example.com/rest/api/content/12345", "auth_token": "your_confluence_token"},
+    ]
+
+    for record in records:
+        result = process_record(record)
+        print(f"Processed content and metadata for {record['type']}:\n{result}\n")

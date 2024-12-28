@@ -55,3 +55,11 @@ def load_data_in_batches(batch_size=1000):
         logging.error(f"Error while fetching data from MongoDB: {e}")
     finally:
         cursor.close()
+def process_files_in_parallel(file_paths):
+    try:
+        with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+            for file_path in file_paths:
+                file_type = file_path.split('.')[-1]
+                executor.submit(process_file, file_path, file_type)
+    except Exception as e:
+        logging.error(f"Error processing files in parallel: {e}")
