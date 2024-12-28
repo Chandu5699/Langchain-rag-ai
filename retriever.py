@@ -17,7 +17,9 @@ es = Elasticsearch("http://localhost:9200")
 model_name = "t5-base"  # You can change this to "facebook/bart-large" for BART
 tokenizer = T5Tokenizer.from_pretrained(model_name)
 model = T5ForConditionalGeneration.from_pretrained(model_name)
-from langchain.prompts import PromptTemplate
+
+# Chat buffer memory to store chat message history
+chat_buffer = []
 
 # Define a prompt template to generate different queries from the original query
 query_variation_template = PromptTemplate(
@@ -36,20 +38,32 @@ query_variation_template = PromptTemplate(
     5.
     """
 )
-def process_query(query):
+
+def generate_query_variations(query, llm):
     try:
-        # Step 1: Generate different variations of the query
-        query_variations = query_variation_template.run(original_query=original_query)
-        print("Generated Query Variations:", query_variations)
-        
-        # Step 2: Retrieve documents for each query variation
+        # Generate query variations using the LLM
+        prompt = query_variation_template.format(original_query=query)
+        response = llm.generate(prompt)
+
+        # Split the response into separate lines to get individual variations
+        query_variations = response.strip().split("\n")
+
+        # Retrieve documents for each query variation
         all_retrieved_docs = []
-        for query in query_variations.splitlines():
-            docs = retrieve_documents_from_query(query)
+        for query_variant in query_variations:
+            docs = retrieve_documents_from_query(query_variant)
             all_retrieved_docs.extend(docs)
+
+        # Store the query and responses in chat buffer
+        chat_buffer.append({"role": "user", "content": query})
+        for variant in query_variations:
+            chat_buffer.append({"role": "assistant", "content": variant})
+
+        return all_retrieved_docs  # Return the aggregated documents from all variations
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logging.error(f"Error generating query variations: {e}")
         return None
+
 # Initialize the hybrid search function using Elasticsearch
 def hybrid_search(query, index="documents", num_results=5):
     try:
@@ -74,20 +88,43 @@ def hybrid_search(query, index="documents", num_results=5):
         }
         # Execute the hybrid search query
         response = es.search(index=index, body=body)
-        # Extract the top results
-        results = [hit["_source"] for hit in response["hits"]["hits"]]
-        return results
+        # Parse the results
+        parsed_results = parse_elasticsearch_results(response)
+
+        # Store the query and search results in chat buffer
+        chat_buffer.append({"role": "user", "content": query})
+        chat_buffer.append({"role": "assistant", "content": str(parsed_results)})
+
+        return parsed_results
 
     except Exception as e:
         logging.error(f"Error in hybrid search: {str(e)}")
         return []
 
+def parse_elasticsearch_results(response):
+    try:
+        # Extract the top results
+        results = [hit["_source"] for hit in response["hits"]["hits"]]
+        parsed_results = []
+        
+        for result in results:
+            parsed_result = {
+                "title": result.get("title", "No title"),
+                "text": result.get("text", "No text content"),
+                "score": result.get("_score", 0)
+            }
+            parsed_results.append(parsed_result)
+        
+        return parsed_results
+    except Exception as e:
+        logging.error(f"Error parsing Elasticsearch results: {str(e)}")
+        return []
 
 def get_chain_of_thought_prompt(query, documents):
     # Custom Chain of Thought (CoT) prompt template to guide conversational reasoning
     thought_process = """
     We have a question and multiple documents. Let's reason through these documents step by step, 
-    analyzing the relevance of each one to the query, and then combining the insights to form the best possible documents. 
+    analyzing the relevance of each one to the query, and then combining the insights to form the best possible answer. 
     
     Query: {query}
     
@@ -125,28 +162,26 @@ def get_chain_of_thought_prompt(query, documents):
         reasoning_3=documents[2]["reasoning"]
     )
 
-# Example usage:
-documents = [
-    {"type": "pdf", "reasoning": "This document explains the main topic in depth, providing detailed analysis relevant to the query."},
-    {"type": "json", "reasoning": "The data extracted from this JSON document gives concrete figures that directly support the answer."},
-    {"type": "audio", "reasoning": "The transcript of this audio interview provides conversational context that sheds light on the query."}
-]
-
-query = "What are the key insights provided in these documents?"
-
-# Generate the Chain of Thought prompt
-prompt = get_chain_of_thought_prompt(query, documents)
-print(prompt)
+def parse_model_outputs(outputs, tokenizer):
+    try:
+        decoded_outputs = []
+        for output in outputs:
+            decoded_output = tokenizer.decode(output, skip_special_tokens=True)
+            decoded_outputs.append(decoded_output)
+        return decoded_outputs
+    except Exception as e:
+        logging.error(f"Error parsing model outputs: {str(e)}")
+        return []
 
 # Ranking the documents using T5/BART
-def rank_documents_with_model(documents, query):
+def rank_documents_with_model(documents, query, model, tokenizer):
     try:
         ranked_documents = []
         for doc in documents:
             input_text = f"Rank this document: {doc['text']} based on the query: {query}"
             inputs = tokenizer(input_text, return_tensors="pt", truncation=True, padding=True)
             outputs = model.generate(inputs['input_ids'], max_length=50)
-            rank_score = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            rank_score = parse_model_outputs(outputs, tokenizer)[0]
             ranked_documents.append((doc, rank_score))
         
         # Sort documents based on the generated rank score
@@ -157,22 +192,26 @@ def rank_documents_with_model(documents, query):
         logging.error(f"Error in ranking documents: {str(e)}")
         return documents
 
+def parse_cot_result(response):
+    try:
+        # Assuming the response is a string, you can format it or extract key parts
+        formatted_response = response.strip()
+        return formatted_response
+    except Exception as e:
+        logging.error(f"Error parsing CoT result: {str(e)}")
+        return "Sorry, I couldn't generate an answer."
+
 # Define the Conversational Chain LLM with Chain of Thought (CoT)
 def generate_answer_with_cot(query, documents):
     try:
         # Step 1: Rank documents using the T5/BART model
-        ranked_documents = rank_documents_with_model(documents, query)
+        ranked_documents = rank_documents_with_model(documents, query, model, tokenizer)
         
         # Step 2: Create the Chain of Thought prompt template
         # Here we only show 3 documents, but it can be scaled for more
         prompt = get_chain_of_thought_prompt(
             query=query,
-            doc_1_text=ranked_documents[0]["text"],
-            reasoning_1="Explain why this document is relevant.",
-            doc_2_text=ranked_documents[1]["text"],
-            reasoning_2="Explain why this document is relevant.",
-            doc_3_text=ranked_documents[2]["text"],
-            reasoning_3="Explain why this document is relevant."
+            documents=ranked_documents[:3]  # Limiting to top 3 documents for simplicity
         )
 
         # Load Conversational Chain LLM (e.g., OpenAI's GPT)
@@ -183,8 +222,14 @@ def generate_answer_with_cot(query, documents):
         conversational_chain = ConversationalRetrievalChain.from_llm(llm, retriever=retriever)
 
         # Get the answer from the conversational chain using the CoT prompt
-        response = conversational_chain.run(input=prompt.format(query=query))
-        return response
+        response = conversational_chain.run(input=prompt)
+        parsed_response = parse_cot_result(response)
+
+        # Store the query and final response in chat buffer
+        chat_buffer.append({"role": "user", "content": query})
+        chat_buffer.append({"role": "assistant", "content": parsed_response})
+
+        return parsed_response
 
     except Exception as e:
         logging.error(f"Error in generating answer with Chain of Thought: {str(e)}")
@@ -211,6 +256,7 @@ def main(query):
         return "An error occurred while processing the query."
 
 # Example Query
-query = "What is the capital of France?"
-result = main(query)
-print(result)
+if __name__ == "__main__":
+    query = "What is the capital of France?"
+    result = main(query)
+    print(result)

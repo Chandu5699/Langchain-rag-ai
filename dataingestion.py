@@ -43,8 +43,7 @@ try:
 except PyMongoError as e:
     logging.error(f"Failed to connect to MongoDB: {e}")
     raise
-chat_history = ChatMessageHistory()
-conversation_memory = ConversationBufferMemory(chat_memory=chat_history, return_messages=True)
+
 
 def load_data_in_batches(batch_size=1000):
     try:

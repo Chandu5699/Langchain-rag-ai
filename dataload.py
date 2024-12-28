@@ -1,3 +1,20 @@
+import logging
+import os
+import requests
+import fitz  # PyMuPDF
+import cv2
+from moviepy.editor import VideoFileClip
+import speech_recognition as sr
+from pydub import AudioSegment
+from langchain.prompts import PromptTemplate
+from langchain.llms import OpenAI
+
+# Setup logging
+logging.basicConfig(filename='process_log.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Initialize the language model (LLM)
+llm = OpenAI(model="text-davinci-003", temperature=0.7)
+
 # Function to extract text and metadata from a PDF file
 def extract_text_and_metadata_from_pdf(pdf_path):
     try:
@@ -25,7 +42,10 @@ def extract_text_and_metadata_from_audio(audio_path):
             "file_size": os.path.getsize(audio_path),
             "format": audio.format_description,
         }
-        text = "Extracted text from audio"  # Placeholder for STT integration
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(audio_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
         prompt = PromptTemplate(
             input_variables=["text"],
             template="Transcribe and refine the text from this audio: {text}"
@@ -39,22 +59,21 @@ def extract_text_and_metadata_from_audio(audio_path):
 # Function to extract metadata and placeholder text from a video file
 def extract_text_and_metadata_from_video(video_path):
     try:
-        cap = cv2.VideoCapture(video_path)
+        video = VideoFileClip(video_path)
+        audio_path = "temp_audio.wav"
+        video.audio.write_audiofile(audio_path)
+        
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(audio_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+        
         metadata = {
-            "frame_count": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
-            "frame_rate": cap.get(cv2.CAP_PROP_FPS),
-            "resolution": (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))),
-            "file_size": os.path.getsize(video_path),
+            "duration_seconds": video.duration,
+            "resolution": video.size,
+            "fps": video.fps,
+            "file_size": os.path.getsize(video_path)
         }
-        text = ""
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if ret:
-                # Placeholder for OCR integration
-                text += "Extracted text from frame"
-            else:
-                break
-        cap.release()
         prompt = PromptTemplate(
             input_variables=["text"],
             template="Summarize the meaningful content extracted from this video: {text}"
@@ -122,7 +141,7 @@ def extract_text_and_metadata_from_confluence(confluence_url, auth_token):
                 input_variables=["confluence_data"],
                 template="Summarize the Confluence page content: {confluence_data}"
             )
-            result = llm(prompt.format(confluence_data=data))
+            result = llm.prompt.format(confluence_data=data)
             return {"content": result, "metadata": metadata}
         else:
             logging.error(f"Failed to fetch Confluence content: {response.status_code}")
