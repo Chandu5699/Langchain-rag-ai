@@ -71,7 +71,7 @@ def generate_query_variations(query, llm):
         logging.error(f"Error generating query variations: {e}")
         return None
 
-# Initialize the hybrid search function using Elasticsearch and Neo4j
+#vector serach# Initialize the hybrid search function using Elasticsearch and Neo4j
 def hybrid_search(query, index="documents", num_results=5):
     try:
         # Vector Search: Use OpenAI Embeddings to create vector representation of the query
