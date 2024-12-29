@@ -1,0 +1,19 @@
+pip install pymongo          # MongoDB
+pip install redis              # Redis
+pip install faiss-cpu          # FAISS (use faiss-gpu if you need GPU support)
+pip install elasticsearch      # Elasticsearch
+pip install openai             # OpenAI (for GPT-based LLMs)
+pip install transformers       # Hugging Face Transformers (for LLMs)
+pip install torch              # PyTorch (needed for many deep learning models)
+pip install tensorflow         # TensorFlow (optional, if needed)
+pip install langchain          # LangChain (for LLM projects)
+pip install nltk               # Natural Language Toolkit (for NLP tasks)
+pip install spacy              # spaCy (for NLP)
+pip install pandas             # Pandas (for data handling)
+pip install scikit-learn       # Scikit-Learn (for machine learning)
+pip install matplotlib         # Matplotlib (for visualization)
+pip install seaborn            # Seaborn (for advanced visualization)
+pip install sqlalchemy         # SQLAlchemy (for working with databases)
+pip install docker             # Docker (for containerization, if you plan to use Docker)
+pip install kubernetes         # Kubernetes (for orchestration, if needed)
+pip install awscli             # AWS CLI (for working with AWS services)

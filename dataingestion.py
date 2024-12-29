@@ -20,7 +20,7 @@ from langchain.vectorstores import FAISS
 from langchain.memory import ChatMessageHistory, ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 
-logging.basicConfig(
+logging.basicConfig((system time should come)
     filename="data_processing.log",
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
