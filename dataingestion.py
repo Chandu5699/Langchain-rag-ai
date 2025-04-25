@@ -20,10 +20,11 @@ from langchain.vectorstores import FAISS
 from langchain.memory import ChatMessageHistory, ConversationBufferMemory
 from langchain.chat_models import ChatOpenAI
 
-logging.basicConfig((system time should come)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",  # This will include the system time
     filename="data_processing.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO
 )
 MONGO_URI = "mongodb://localhost:27017"
 DB_NAME = "multimodal_db"

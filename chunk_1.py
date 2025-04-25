@@ -190,6 +190,7 @@ def process_and_chunk_data(records, chunk_size=100, chunk_overlap=10):
         if data_batch:
             yield data_batch
     except Exception as e:
+        # Now logging should be defined
         logging.error(f"Error in processing and chunking data: {e}")
         raise
 
